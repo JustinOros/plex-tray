@@ -250,6 +250,30 @@ class Plex:
         web = [s for s in items if "web" in s.get("Player", {}).get("product", "").lower()]
         return (web or items)[0]
 
+    def tv_players(self):
+        if not self.store.get("token"):
+            return []
+        try:
+            response = check(
+                requests.get(
+                    PLEX_TV + "/api/v2/resources",
+                    params={"includeHttps": 1, "includeRelay": 1},
+                    headers=self.headers(),
+                    timeout=8,
+                )
+            )
+            items = response.json()
+        except (requests.RequestException, PlexError, ValueError):
+            return []
+        found = [
+            i
+            for i in items
+            if "player" in (i.get("provides") or "")
+            and "web" in (i.get("product") or "").lower()
+            and i.get("presence")
+        ]
+        return sorted(found, key=lambda i: i.get("lastSeenAt") or "", reverse=True)
+
     def web_target(self, wait=0):
         deadline = time.time() + wait
         while True:
@@ -259,6 +283,9 @@ class Plex:
             for client in self.clients():
                 if "web" in (client.get("product", "") + " " + client.get("name", "")).lower():
                     return client.get("machineIdentifier")
+            players = self.tv_players()
+            if players:
+                return players[0].get("clientIdentifier")
             if time.time() >= deadline:
                 return None
             time.sleep(2)
@@ -315,15 +342,7 @@ class Plex:
                 return leaves[0]["ratingKey"], 0, "episode"
         raise PlexError(404, "Nothing playable found for that item")
 
-    def play(self, rating_key, offset, kind):
-        target = self.web_target()
-        if not target:
-            webbrowser.open(self.web_url())
-            target = self.web_target(wait=25)
-        if not target:
-            webbrowser.open(self.details_url(rating_key))
-            return False
-        queue = self.create_queue(rating_key, kind)
+    def play_params(self, rating_key, offset, queue):
         parts = urlparse(self.base)
         params = {
             "providerIdentifier": "com.plexapp.plugins.library",
@@ -338,8 +357,44 @@ class Plex:
         token = self.store.get("token")
         if token:
             params["token"] = token
-        self.command("/player/playback/playMedia", params, target)
-        return True
+        return params
+
+    def session_for(self, rating_key, wait):
+        deadline = time.time() + wait
+        while True:
+            session = self.my_session()
+            if session and str(session.get("ratingKey")) == str(rating_key):
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(1)
+
+    def try_play(self, params, target, rating_key, wait):
+        try:
+            self.command("/player/playback/playMedia", params, target)
+        except PlexError as exc:
+            if exc.status != 404:
+                raise
+            return False
+        return self.session_for(rating_key, wait)
+
+    def play(self, rating_key, offset, kind, progress=None, launch_wait=40):
+        queue = self.create_queue(rating_key, kind)
+        params = self.play_params(rating_key, offset, queue)
+        target = self.web_target()
+        if target and self.try_play(params, target, rating_key, 8):
+            return True
+        if progress:
+            progress("Opening Plex Web in your browser")
+        webbrowser.open(self.web_url())
+        deadline = time.time() + launch_wait
+        while time.time() < deadline:
+            time.sleep(3)
+            target = self.web_target()
+            if target and self.try_play(params, target, rating_key, 6):
+                return True
+        webbrowser.open(self.details_url(rating_key))
+        return False
 
     def continue_watching(self):
         found = []
@@ -817,7 +872,7 @@ class App:
     def play_item(self, item):
         key, offset, kind = self.plex.resolve(item)
         self.notify(f"Starting {label(item)}")
-        if self.plex.play(key, offset, kind):
+        if self.plex.play(key, offset, kind, self.notify):
             self.poll_now.set()
         else:
             self.notify(
