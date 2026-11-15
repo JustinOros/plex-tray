@@ -754,15 +754,19 @@ class App:
             yield MenuItem(self.menu_text(f"{title}: Recently Added"), Menu(*self.entries(items)))
         yield Menu.SEPARATOR
         yield MenuItem(
+            "Discord Presence",
+            Menu(
+                self.flag_item("Show What I'm Watching", "discord"),
+                self.flag_item("Hide Title", "hide_title"),
+                MenuItem("Application ID...", self.bg(self.set_discord_id)),
+            ),
+        )
+        yield MenuItem(
             "Settings",
             Menu(
                 MenuItem("Plex URL...", self.bg(self.set_url)),
                 MenuItem("Sign In With Plex...", self.bg(self.sign_in)),
                 MenuItem("Enter Token...", self.bg(self.set_token)),
-                Menu.SEPARATOR,
-                self.flag_item("Show On Discord", "discord"),
-                self.flag_item("Hide Title On Discord", "hide_title"),
-                MenuItem("Discord Application ID...", self.bg(self.set_discord_id)),
                 Menu.SEPARATOR,
                 self.flag_item("Open Plex On Launch", "open_on_launch"),
                 self.flag_item("Notifications", "notifications"),

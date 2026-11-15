@@ -30,10 +30,10 @@ Step 3 is what lets the tray send play, pause and skip commands to the browser t
 
 1. Create an application at https://discord.com/developers/applications and name it Plex
 2. Copy the Application ID
-3. In the tray, open Settings, choose Discord Application ID and paste it
-4. Turn on Show On Discord
+3. In the tray, open Discord Presence, choose Application ID and paste it
+4. Turn on Show What I am Watching
 
-The Discord desktop app must be running on the same computer. Turn on Hide Title On Discord to show only Watching a movie or Watching a show. For an icon, upload an image named `plex` under Rich Presence, Art Assets in your Discord application.
+The Discord desktop app must be running on the same computer. Turn on Hide Title to show only Watching a movie or Watching a show. For an icon, upload an image named `plex` under Rich Presence, Art Assets in your Discord application.
 
 Only your own Plex session is shown. If the app cannot tell which user you are, it only reports when exactly one session exists on the server.
 
