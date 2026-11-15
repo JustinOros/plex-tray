@@ -334,7 +334,23 @@ class Plex:
         return True
 
     def continue_watching(self):
-        return self.container("/library/onDeck", {"X-Plex-Container-Size": 15}).get("Metadata", [])
+        found = []
+        seen = set()
+        error = None
+        for path in ("/hubs/continueWatching/items", "/library/onDeck"):
+            try:
+                items = self.container(path, {"X-Plex-Container-Size": 15}).get("Metadata", [])
+            except PlexError as exc:
+                error = exc
+                continue
+            for item in items:
+                key = item.get("ratingKey")
+                if key not in seen and item.get("type") in ("movie", "episode"):
+                    seen.add(key)
+                    found.append(item)
+        if not found and error:
+            raise error
+        return found[:20]
 
     def sections(self):
         return self.container("/library/sections").get("Directory", [])
@@ -519,6 +535,7 @@ class App:
         self.session = None
         self.fetched_at = 0.0
         self.last_sig = None
+        self.last_cache_error = None
         self.continue_items = []
         self.libraries = []
         self.results = []
@@ -846,7 +863,16 @@ class App:
             try:
                 self.refresh_cache()
             except Exception as exc:
-                log.warning("library refresh failed: %s", str(exc) or exc.__class__.__name__)
+                message = str(exc) or exc.__class__.__name__
+                log.warning("library refresh failed: %s", message)
+                if message != self.last_cache_error:
+                    self.last_cache_error = message
+                    if isinstance(exc, PlexError) and exc.status == 401:
+                        self.notify("Plex needs a sign in. Use Settings, Sign In With Plex.", True)
+                    else:
+                        self.notify(f"Library refresh failed: {message}", True)
+            else:
+                self.last_cache_error = None
             self.cache_evt.wait(60)
             self.cache_evt.clear()
 
