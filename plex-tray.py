@@ -115,8 +115,8 @@ class Store:
 
 
 class PlexError(Exception):
-    def __init__(self, status):
-        super().__init__(f"Plex returned {status}")
+    def __init__(self, status, message=None):
+        super().__init__(message or f"Plex returned {status}")
         self.status = status
 
 
@@ -268,7 +268,15 @@ class Plex:
         query = {"commandID": self.command_id, "type": "video"}
         query.update(params or {})
         headers = self.headers({"X-Plex-Target-Client-Identifier": target})
-        check(self.http.get(self.base + path, params=query, headers=headers, timeout=8))
+        response = self.http.get(self.base + path, params=query, headers=headers, timeout=8)
+        if response.status_code == 404:
+            try:
+                known = [c.get("machineIdentifier") for c in self.clients()]
+            except Exception:
+                known = []
+            log.warning("player not found: command=%s target=%s clients=%s", path, target, known)
+            raise PlexError(404, "Plex cannot find the browser player. Keep a Plex Web tab open with Advertise as a player turned on.")
+        check(response)
 
     def create_queue(self, rating_key, kind):
         uri = f"server://{self.machine()}/com.plexapp.plugins.library/library/metadata/{rating_key}"
@@ -305,7 +313,7 @@ class Plex:
             leaves = self.container(f"/library/metadata/{key}/allLeaves").get("Metadata", [])
             if leaves:
                 return leaves[0]["ratingKey"], 0, "episode"
-        raise PlexError(404)
+        raise PlexError(404, "Nothing playable found for that item")
 
     def play(self, rating_key, offset, kind):
         target = self.web_target()
