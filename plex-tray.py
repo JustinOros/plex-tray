@@ -169,6 +169,7 @@ class Plex:
         self.machine_id = ""
         self.names = None
         self.names_at = 0.0
+        self.mismatch_logged = False
 
     @property
     def base(self):
@@ -242,11 +243,19 @@ class Plex:
             return None
         names = self.owner_names()
         if names:
+            seen = [s.get("User", {}).get("title") for s in items]
             items = [s for s in items if s.get("User", {}).get("title") in names]
+            if not items and not self.mismatch_logged:
+                self.mismatch_logged = True
+                log.info("no session matches account names=%s session users=%s", sorted(names), seen)
         elif len(items) != 1:
+            if not self.mismatch_logged:
+                self.mismatch_logged = True
+                log.info("account name unknown and %d sessions active, skipping", len(items))
             return None
         if not items:
             return None
+        self.mismatch_logged = False
         web = [s for s in items if "web" in s.get("Player", {}).get("product", "").lower()]
         return (web or items)[0]
 
@@ -533,6 +542,7 @@ class Presence:
             except TypeError:
                 self.rpc.update(**payload)
             self.sig, self.start = sig, start
+            log.info("discord presence set: %s | %s", payload["details"], payload["state"])
         except Exception as exc:
             log.info("discord update failed: %s", exc)
             self.close()
