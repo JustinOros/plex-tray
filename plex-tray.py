@@ -506,18 +506,127 @@ def ask(title, prompt, default="", secret=False):
         if result.returncode != 0:
             return None
         return result.stdout.strip()
-    import tkinter as tk
-    from tkinter import simpledialog
+    return tk_dialog(title, prompt, default, secret)
 
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
+
+def is_dark():
     try:
-        return simpledialog.askstring(
-            title, prompt, initialvalue=default, show="*" if secret else None, parent=root
-        )
-    finally:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"], capture_output=True, text=True
+            )
+            return result.stdout.strip().lower() == "dark"
+        if sys.platform == "win32":
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            )
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+        for args in (
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            ["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"],
+        ):
+            result = subprocess.run(args, capture_output=True, text=True)
+            if "dark" in result.stdout.lower():
+                return True
+        return "dark" in os.environ.get("GTK_THEME", "").lower()
+    except Exception:
+        return False
+
+
+def enable_dark_menus():
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        uxtheme = ctypes.windll.uxtheme
+        set_mode = uxtheme[135]
+        set_mode.argtypes = [ctypes.c_int]
+        set_mode(1)
+        uxtheme[136]()
+    except Exception:
+        pass
+
+
+def tk_dialog(title, prompt, default, secret):
+    import tkinter as tk
+
+    if is_dark():
+        bg, fg, field, button = "#202020", "#f0f0f0", "#2d2d2d", "#3a3a3a"
+    else:
+        bg, fg, field, button = "#f5f5f5", "#111111", "#ffffff", "#e1e1e1"
+    root = tk.Tk()
+    root.title(title)
+    root.configure(bg=bg)
+    root.resizable(False, False)
+    root.attributes("-topmost", True)
+    result = {"value": None}
+    tk.Label(root, text=prompt, bg=bg, fg=fg, justify="left", wraplength=380).pack(
+        padx=16, pady=(16, 8), anchor="w"
+    )
+    var = tk.StringVar(value=default)
+    entry = tk.Entry(
+        root,
+        textvariable=var,
+        width=46,
+        show="*" if secret else "",
+        bg=field,
+        fg=fg,
+        insertbackground=fg,
+        relief="flat",
+        highlightthickness=1,
+        highlightbackground=button,
+        highlightcolor="#e5a00d",
+    )
+    entry.pack(padx=16, pady=4, ipady=4)
+
+    def accept(event=None):
+        result["value"] = var.get()
         root.destroy()
+
+    def cancel(event=None):
+        root.destroy()
+
+    row = tk.Frame(root, bg=bg)
+    row.pack(padx=16, pady=(8, 16), anchor="e")
+    for text, command in (("Cancel", cancel), ("OK", accept)):
+        tk.Button(
+            row,
+            text=text,
+            command=command,
+            bg=button,
+            fg=fg,
+            activebackground=field,
+            activeforeground=fg,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            width=9,
+        ).pack(side="left", padx=4)
+    root.bind("<Return>", accept)
+    root.bind("<Escape>", cancel)
+    if sys.platform == "win32" and is_dark():
+        try:
+            import ctypes
+
+            root.update()
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(ctypes.c_int(1)), 4
+            )
+        except Exception:
+            pass
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() - root.winfo_width()) // 2
+    y = (root.winfo_screenheight() - root.winfo_height()) // 3
+    root.geometry(f"+{x}+{y}")
+    entry.focus_force()
+    entry.select_range(0, "end")
+    root.mainloop()
+    return result["value"]
 
 
 class App:
@@ -897,7 +1006,8 @@ class App:
             self.icon.stop()
 
     def run(self):
-        self.icon = pystray.Icon(APP, self.images["idle"], APP, Menu(self.menu_items))
+        enable_dark_menus()
+        self.icon =pystray.Icon(APP, self.images["idle"], APP, Menu(self.menu_items))
         self.icon.run(self.setup)
         if self.poll_thread:
             self.poll_thread.join(3)
