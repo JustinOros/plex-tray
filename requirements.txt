@@ -1,4 +1,4 @@
 pystray
 Pillow
 requests
-pypresence
+pypresence>=4.6.0

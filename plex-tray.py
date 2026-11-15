@@ -24,6 +24,16 @@ REQUIRED = {
 }
 
 
+def old_pypresence():
+    try:
+        from importlib.metadata import version
+
+        parts = version("pypresence").split(".")
+        return tuple(int(p) for p in parts[:2]) < (4, 6)
+    except Exception:
+        return False
+
+
 def ensure_deps():
     missing = []
     for module, package in REQUIRED.items():
@@ -31,9 +41,11 @@ def ensure_deps():
             importlib.import_module(module)
         except ImportError:
             missing.append(package)
+    if "pypresence" not in missing and old_pypresence():
+        missing.append("pypresence>=4.6.0")
     if not missing:
         return
-    cmd = [sys.executable, "-m", "pip", "install", "--quiet"] + missing
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade"] + missing
     if subprocess.call(cmd) != 0:
         subprocess.check_call(cmd + ["--break-system-packages"])
     importlib.invalidate_caches()
@@ -319,25 +331,22 @@ def build_payload(store, session, position_ms):
     kind = session.get("type")
     paused = session.get("Player", {}).get("state") == "paused"
     if kind == "episode":
-        details = session.get("grandparentTitle") or "Episode"
+        name = f"{session.get('grandparentTitle') or 'Episode'} (TV Series)"
         code = f"S{session.get('parentIndex', 0)}E{session.get('index', 0)}"
-        state = f"{code} {session.get('title', '')}".strip()
+        details = f"{code} {session.get('title', '')}".strip()
         generic = "Watching a show"
     else:
-        details = session.get("title") or "Movie"
-        state = str(session["year"]) if session.get("year") else "Movie"
+        name = f"{session.get('title') or 'Movie'} (Movie)"
+        details = str(session["year"]) if session.get("year") else ""
         generic = "Watching a movie"
     if hide:
-        details, state = generic, "Plex"
+        name, details = "Plex", generic
+    payload = {"name": name[:128].ljust(2), "large_image": "plex", "large_text": "Plex"}
+    if details:
+        payload["details"] = details[:128].ljust(2)
     if paused:
-        state = f"Paused - {state}"
-    payload = {
-        "details": details[:128].ljust(2),
-        "state": state[:128].ljust(2),
-        "large_image": "plex",
-        "large_text": "Plex",
-    }
-    if not paused:
+        payload["state"] = "Paused"
+    else:
         start = time.time() - position_ms / 1000.0
         payload["start"] = int(start)
         duration = session.get("duration", 0)
@@ -400,7 +409,7 @@ class Presence:
             self.clear()
             return
         payload = build_payload(self.store, session, position_ms)
-        sig = (payload["details"], payload["state"], "start" in payload)
+        sig = (payload["name"], payload.get("details"), payload.get("state"), "start" in payload)
         start = payload.get("start", 0)
         if sig == self.sig and abs(start - self.start) < 6:
             return
@@ -408,15 +417,20 @@ class Presence:
             return
         try:
             kind = getattr(pypresence, "ActivityType", None)
-            try:
-                if kind is not None:
-                    self.rpc.update(activity_type=kind.WATCHING, **payload)
-                else:
-                    self.rpc.update(**payload)
-            except TypeError:
-                self.rpc.update(**payload)
+            full = dict(payload)
+            if kind is not None:
+                full["activity_type"] = kind.WATCHING
+            attempts = [full, payload, {k: v for k, v in payload.items() if k != "name"}]
+            for args in attempts:
+                try:
+                    self.rpc.update(**args)
+                    break
+                except TypeError:
+                    continue
+            else:
+                raise TypeError("pypresence is too old, upgrade it")
             self.sig, self.start = sig, start
-            log.info("discord presence set: %s | %s", payload["details"], payload["state"])
+            log.info("discord presence set: %s", payload["name"])
         except Exception as exc:
             log.info("discord update failed: %s", exc)
             self.close()
