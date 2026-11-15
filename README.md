@@ -1,18 +1,20 @@
 # plex-tray
 
-A system tray app that remote controls Plex playback in your default browser and can show what you are watching on Discord.
+A system tray app that opens Plex titles in your default browser and can show what you are watching on Discord.
 
 Runs on Windows, macOS and Linux as a single Python script.
 
 ## Features
 
-- Play, pause, previous, next, back 10 seconds, forward 30 seconds and stop from the tray
 - Continue Watching, recently added per library, and search
-- Playing a show resumes the next episode and keeps going through the season
-- Movies and shows play in your default browser using Plex Web
-- Optional Discord Rich Presence with a title hiding option
+- Picking a title opens it in your default browser using Plex Web, ready to play
+- Picking a show opens the next episode to watch
+- Optional Discord Rich Presence with a title hiding option, driven by your Plex session
 - Sign in with Plex or paste a token, or use no token on a server that allows your network without auth
+- Menus and dialogs follow the system dark or light theme
 - Missing Python packages install automatically on first launch
+
+Plex removed remote control support from Plex Web, so play, pause and skip stay in the browser.
 
 ## Quick start
 
@@ -22,9 +24,7 @@ python3 plex-tray.py
 
 1. Enter your Plex URL when asked, for example `http://192.168.1.10:32400`
 2. Open Settings and choose Sign In With Plex if the server asks for a token
-3. In Plex Web, turn on Advertise as a player in the Plex Web settings
-
-Step 3 is what lets the tray send play, pause and skip commands to the browser tab. Keep a Plex Web tab open. The first play after opening a fresh tab may need one click inside the tab because of browser autoplay rules.
+3. Pick a title from the tray menu and press play in the browser tab
 
 ## Discord
 

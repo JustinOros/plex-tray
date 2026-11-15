@@ -234,9 +234,6 @@ class Plex:
     def sessions(self):
         return self.container("/status/sessions").get("Metadata", []) or []
 
-    def clients(self):
-        return self.container("/clients").get("Server", []) or []
-
     def my_session(self):
         items = self.sessions()
         if not items:
@@ -258,75 +255,6 @@ class Plex:
         self.mismatch_logged = False
         web = [s for s in items if "web" in s.get("Player", {}).get("product", "").lower()]
         return (web or items)[0]
-
-    def tv_players(self):
-        if not self.store.get("token"):
-            return []
-        try:
-            response = check(
-                requests.get(
-                    PLEX_TV + "/api/v2/resources",
-                    params={"includeHttps": 1, "includeRelay": 1},
-                    headers=self.headers(),
-                    timeout=8,
-                )
-            )
-            items = response.json()
-        except (requests.RequestException, PlexError, ValueError):
-            return []
-        found = [
-            i
-            for i in items
-            if "player" in (i.get("provides") or "")
-            and "web" in (i.get("product") or "").lower()
-            and i.get("presence")
-        ]
-        return sorted(found, key=lambda i: i.get("lastSeenAt") or "", reverse=True)
-
-    def web_target(self, wait=0):
-        deadline = time.time() + wait
-        while True:
-            session = self.my_session()
-            if session and "web" in session.get("Player", {}).get("product", "").lower():
-                return session["Player"]["machineIdentifier"]
-            for client in self.clients():
-                if "web" in (client.get("product", "") + " " + client.get("name", "")).lower():
-                    return client.get("machineIdentifier")
-            players = self.tv_players()
-            if players:
-                return players[0].get("clientIdentifier")
-            if time.time() >= deadline:
-                return None
-            time.sleep(2)
-
-    def command(self, path, params, target):
-        self.command_id += 1
-        query = {"commandID": self.command_id, "type": "video"}
-        query.update(params or {})
-        headers = self.headers({"X-Plex-Target-Client-Identifier": target})
-        response = self.http.get(self.base + path, params=query, headers=headers, timeout=8)
-        if response.status_code == 404:
-            try:
-                known = [c.get("machineIdentifier") for c in self.clients()]
-            except Exception:
-                known = []
-            log.warning("player not found: command=%s target=%s clients=%s", path, target, known)
-            raise PlexError(404, "Plex cannot find the browser player. Keep a Plex Web tab open with Advertise as a player turned on.")
-        check(response)
-
-    def create_queue(self, rating_key, kind):
-        uri = f"server://{self.machine()}/com.plexapp.plugins.library/library/metadata/{rating_key}"
-        params = {
-            "type": "video",
-            "uri": uri,
-            "repeat": 0,
-            "own": 1,
-            "continuous": 1 if kind == "episode" else 0,
-        }
-        response = check(
-            self.http.post(self.base + "/playQueues", params=params, headers=self.headers(), timeout=8)
-        )
-        return response.json()["MediaContainer"]["playQueueID"]
 
     def web_url(self):
         return self.base + "/web/index.html"
@@ -350,60 +278,6 @@ class Plex:
             if leaves:
                 return leaves[0]["ratingKey"], 0, "episode"
         raise PlexError(404, "Nothing playable found for that item")
-
-    def play_params(self, rating_key, offset, queue):
-        parts = urlparse(self.base)
-        params = {
-            "providerIdentifier": "com.plexapp.plugins.library",
-            "machineIdentifier": self.machine(),
-            "protocol": parts.scheme,
-            "address": parts.hostname,
-            "port": parts.port or (443 if parts.scheme == "https" else 80),
-            "offset": int(offset),
-            "key": f"/library/metadata/{rating_key}",
-            "containerKey": f"/playQueues/{queue}?window=200&own=1",
-        }
-        token = self.store.get("token")
-        if token:
-            params["token"] = token
-        return params
-
-    def session_for(self, rating_key, wait):
-        deadline = time.time() + wait
-        while True:
-            session = self.my_session()
-            if session and str(session.get("ratingKey")) == str(rating_key):
-                return True
-            if time.time() >= deadline:
-                return False
-            time.sleep(1)
-
-    def try_play(self, params, target, rating_key, wait):
-        try:
-            self.command("/player/playback/playMedia", params, target)
-        except PlexError as exc:
-            if exc.status != 404:
-                raise
-            return False
-        return self.session_for(rating_key, wait)
-
-    def play(self, rating_key, offset, kind, progress=None, launch_wait=40):
-        queue = self.create_queue(rating_key, kind)
-        params = self.play_params(rating_key, offset, queue)
-        target = self.web_target()
-        if target and self.try_play(params, target, rating_key, 8):
-            return True
-        if progress:
-            progress("Opening Plex Web in your browser")
-        webbrowser.open(self.web_url())
-        deadline = time.time() + launch_wait
-        while time.time() < deadline:
-            time.sleep(3)
-            target = self.web_target()
-            if target and self.try_play(params, target, rating_key, 6):
-                return True
-        webbrowser.open(self.details_url(rating_key))
-        return False
 
     def continue_watching(self):
         found = []
@@ -709,7 +583,6 @@ class App:
             self.store.set(client_id=str(uuid.uuid4()))
         self.plex = Plex(self.store)
         self.quit = threading.Event()
-        self.poll_now = threading.Event()
         self.cache_evt = threading.Event()
         self.dialog_lock = threading.Lock()
         self.icon = None
@@ -774,10 +647,6 @@ class App:
         duration = session.get("duration", 0)
         return min(position, duration) if duration else position
 
-    def is_playing(self):
-        session = self.session
-        return bool(session) and session.get("Player", {}).get("state") == "playing"
-
     def now_text(self):
         session = self.session
         if not session:
@@ -808,17 +677,6 @@ class App:
     def menu_items(self):
         yield MenuItem(lambda item: self.now_text(), None, enabled=False)
         yield Menu.SEPARATOR
-        yield MenuItem(
-            lambda item: "Pause" if self.is_playing() else "Play",
-            self.bg(self.toggle),
-            default=True,
-        )
-        yield MenuItem("Previous", self.bg(self.transport, "skipPrevious"))
-        yield MenuItem("Next", self.bg(self.transport, "skipNext"))
-        yield MenuItem("Back 10 Seconds", self.bg(self.seek, -10))
-        yield MenuItem("Forward 30 Seconds", self.bg(self.seek, 30))
-        yield MenuItem("Stop", self.bg(self.transport, "stop"))
-        yield Menu.SEPARATOR
         yield MenuItem("Search...", self.bg(self.search))
         if self.results:
             yield MenuItem("Search Results", Menu(*self.entries(self.results)))
@@ -848,48 +706,10 @@ class App:
         yield MenuItem("Open Plex Web", self.bg(self.open_web))
         yield MenuItem("Quit", self.on_quit)
 
-    def target(self):
-        session = self.session
-        if not session:
-            return None
-        return session.get("Player", {}).get("machineIdentifier")
-
-    def transport(self, command):
-        target = self.target()
-        if not target:
-            self.notify("Nothing is playing", True)
-            return
-        self.plex.command(f"/player/playback/{command}", {}, target)
-        self.poll_now.set()
-
-    def toggle(self):
-        session = self.session
-        if not session:
-            self.notify("Nothing is playing", True)
-            return
-        paused = session.get("Player", {}).get("state") == "paused"
-        self.transport("play" if paused else "pause")
-
-    def seek(self, seconds):
-        target = self.target()
-        if not target:
-            self.notify("Nothing is playing", True)
-            return
-        offset = max(0, int(self.position() + seconds * 1000))
-        self.plex.command("/player/playback/seekTo", {"offset": offset}, target)
-        self.poll_now.set()
-
     def play_item(self, item):
         key, offset, kind = self.plex.resolve(item)
-        self.notify(f"Starting {label(item)}")
-        if self.plex.play(key, offset, kind, self.notify):
-            self.poll_now.set()
-        else:
-            self.notify(
-                "Opened in your browser. Turn on Advertise as a player in Plex Web settings "
-                "so this app can control playback.",
-                True,
-            )
+        webbrowser.open(self.plex.details_url(key))
+        self.notify(f"Opening {label(item)} in your browser")
 
     def search(self):
         query = self.ask("Search Plex", "Movie or show title")
@@ -1027,9 +847,7 @@ class App:
                     presence.update(session, self.position())
                 except Exception:
                     log.exception("presence failed")
-                if self.poll_now.wait(2):
-                    time.sleep(0.8)
-                    self.poll_now.clear()
+                self.quit.wait(2)
         finally:
             presence.close()
 
@@ -1077,14 +895,13 @@ class App:
 
     def shutdown(self):
         self.quit.set()
-        self.poll_now.set()
         self.cache_evt.set()
         if self.icon:
             self.icon.stop()
 
     def run(self):
         enable_dark_menus()
-        self.icon =pystray.Icon(APP, self.images["idle"], APP, Menu(self.menu_items))
+        self.icon = pystray.Icon(APP, self.images["idle"], APP, Menu(self.menu_items))
         self.icon.run(self.setup)
         if self.poll_thread:
             self.poll_thread.join(3)
